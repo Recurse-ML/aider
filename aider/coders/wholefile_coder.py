@@ -8,19 +8,26 @@ from .wholefile_prompts import WholeFilePrompts
 
 
 class WholeFileCoder(Coder):
-    """A coder that operates on entire files for code modifications."""
+    def __init__(self, *args, **kwargs):
+        self.gpt_prompts = WholeFilePrompts()
+        super().__init__(*args, **kwargs)
 
-    edit_format = "whole"
-    gpt_prompts = WholeFilePrompts()
+    def update_cur_messages(self, edited):
+        if edited:
+            self.cur_messages += [
+                dict(role="assistant", content=self.gpt_prompts.redacted_edit_message)
+            ]
+        else:
+            self.cur_messages += [dict(role="assistant", content=self.partial_response_content)]
 
     def render_incremental_response(self, final):
         try:
-            return self.get_edits(mode="diff")
+            return self.update_files(mode="diff")
         except ValueError:
-            return self.get_multi_response_content_in_progress()
+            return self.partial_response_content
 
-    def get_edits(self, mode="update"):
-        content = self.get_multi_response_content_in_progress()
+    def update_files(self, mode="update"):
+        content = self.partial_response_content
 
         chat_files = self.get_inchat_relative_files()
 
@@ -39,7 +46,7 @@ class WholeFileCoder(Coder):
                     # ending an existing block
                     saw_fname = None
 
-                    full_path = self.abs_root_path(fname)
+                    full_path = (Path(self.root) / fname).absolute()
 
                     if mode == "diff":
                         output += self.do_live_diff(full_path, new_lines, True)
@@ -56,14 +63,6 @@ class WholeFileCoder(Coder):
                     fname_source = "block"
                     fname = lines[i - 1].strip()
                     fname = fname.strip("*")  # handle **filename.py**
-                    fname = fname.rstrip(":")
-                    fname = fname.strip("`")
-                    fname = fname.lstrip("#")
-                    fname = fname.strip()
-
-                    # Issue #1232
-                    if len(fname) > 250:
-                        fname = ""
 
                     # Did gpt prepend a bogus dir? It especially likes to
                     # include the path/to prefix from the one-shot example in
@@ -105,40 +104,34 @@ class WholeFileCoder(Coder):
         if fname:
             edits.append((fname, fname_source, new_lines))
 
-        seen = set()
-        refined_edits = []
+        edited = set()
         # process from most reliable filename, to least reliable
         for source in ("block", "saw", "chat"):
             for fname, fname_source, new_lines in edits:
                 if fname_source != source:
                     continue
                 # if a higher priority source already edited the file, skip
-                if fname in seen:
+                if fname in edited:
                     continue
 
-                seen.add(fname)
-                refined_edits.append((fname, fname_source, new_lines))
+                # we have a winner
+                new_lines = "".join(new_lines)
+                if self.allowed_to_edit(fname, new_lines):
+                    edited.add(fname)
 
-        return refined_edits
-
-    def apply_edits(self, edits):
-        for path, fname_source, new_lines in edits:
-            full_path = self.abs_root_path(path)
-            new_lines = "".join(new_lines)
-            self.io.write_text(full_path, new_lines)
+        return edited
 
     def do_live_diff(self, full_path, new_lines, final):
-        if Path(full_path).exists():
-            orig_lines = self.io.read_text(full_path)
-            if orig_lines is not None:
-                orig_lines = orig_lines.splitlines(keepends=True)
+        if full_path.exists():
+            orig_lines = self.io.read_text(full_path).splitlines(keepends=True)
 
-                show_diff = diffs.diff_partial_update(
-                    orig_lines,
-                    new_lines,
-                    final=final,
-                ).splitlines()
-                return show_diff
+            show_diff = diffs.diff_partial_update(
+                orig_lines,
+                new_lines,
+                final=final,
+            ).splitlines()
+            output = show_diff
+        else:
+            output = ["```"] + new_lines + ["```"]
 
-        output = ["```"] + new_lines + ["```"]
         return output
