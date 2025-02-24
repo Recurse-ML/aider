@@ -3,11 +3,7 @@
 import sys
 from pathlib import Path
 
-try:
-    import git
-except ImportError:
-    git = None
-
+import git
 from diff_match_patch import diff_match_patch
 from tqdm import tqdm
 
@@ -488,7 +484,7 @@ def git_cherry_pick_osr_onto_o(texts):
         # cherry pick R onto original
         try:
             repo.git.cherry_pick(replace_hash, "--minimal")
-        except (git.exc.ODBError, git.exc.GitError):
+        except git.exc.GitCommandError:
             # merge conflicts!
             return
 
@@ -526,7 +522,7 @@ def git_cherry_pick_sr_onto_so(texts):
         # cherry pick replace onto original
         try:
             repo.git.cherry_pick(replace_hash, "--minimal")
-        except (git.exc.ODBError, git.exc.GitError):
+        except git.exc.GitCommandError:
             # merge conflicts!
             return
 

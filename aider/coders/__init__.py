@@ -1,26 +1,19 @@
-from .architect_coder import ArchitectCoder
-from .ask_coder import AskCoder
 from .base_coder import Coder
 from .editblock_coder import EditBlockCoder
 from .editblock_fenced_coder import EditBlockFencedCoder
-from .editor_editblock_coder import EditorEditBlockCoder
-from .editor_whole_coder import EditorWholeFileCoder
-from .help_coder import HelpCoder
+from .editblock_func_coder import EditBlockFunctionCoder
+from .single_wholefile_func_coder import SingleWholeFileFunctionCoder
 from .udiff_coder import UnifiedDiffCoder
 from .wholefile_coder import WholeFileCoder
-
-# from .single_wholefile_func_coder import SingleWholeFileFunctionCoder
+from .wholefile_func_coder import WholeFileFunctionCoder
 
 __all__ = [
-    HelpCoder,
-    AskCoder,
     Coder,
     EditBlockCoder,
     EditBlockFencedCoder,
     WholeFileCoder,
+    WholeFileFunctionCoder,
+    EditBlockFunctionCoder,
+    SingleWholeFileFunctionCoder,
     UnifiedDiffCoder,
-    #    SingleWholeFileFunctionCoder,
-    ArchitectCoder,
-    EditorEditBlockCoder,
-    EditorWholeFileCoder,
 ]

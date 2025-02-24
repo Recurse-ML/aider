@@ -1,5 +1,7 @@
+import io
 import os
 import re
+import runpy
 import subprocess
 import sys
 import traceback
@@ -8,10 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from grep_ast import TreeContext, filename_to_lang
-from grep_ast.tsl import get_parser  # noqa: E402
+from tree_sitter_languages import get_parser  # noqa: E402
+from contextlib import redirect_stdout
 
 from aider.dump import dump  # noqa: F401
-from aider.run_cmd import run_cmd_subprocess  # noqa: F401
 
 # tree_sitter is throwing a FutureWarning
 warnings.simplefilter("ignore", category=FutureWarning)
@@ -36,31 +38,23 @@ class Linter:
 
     def get_rel_fname(self, fname):
         if self.root:
-            try:
-                return os.path.relpath(fname, self.root)
-            except ValueError:
-                return fname
+            return os.path.relpath(fname, self.root)
         else:
             return fname
 
     def run_cmd(self, cmd, rel_fname, code):
         cmd += " " + rel_fname
+        cmd = cmd.split()
 
-        returncode = 0
-        stdout = ""
-        try:
-            returncode, stdout = run_cmd_subprocess(
-                cmd,
-                cwd=self.root,
-                encoding=self.encoding,
-            )
-        except OSError as err:
-            print(f"Unable to execute lint command: {err}")
-            return
-        errors = stdout
-        if returncode == 0:
+        process = subprocess.Popen(
+            cmd, cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+        )
+        stdout, _ = process.communicate()
+        errors = stdout.decode()
+        if process.returncode == 0:
             return  # zero exit status
 
+        cmd = " ".join(cmd)
         res = f"## Running: {cmd}\n\n"
         res += errors
 
@@ -80,11 +74,7 @@ class Linter:
 
     def lint(self, fname, cmd=None):
         rel_fname = self.get_rel_fname(fname)
-        try:
-            code = Path(fname).read_text(encoding=self.encoding, errors="replace")
-        except OSError as err:
-            print(f"Unable to read {fname}: {err}")
-            return
+        code = Path(fname).read_text(self.encoding)
 
         if cmd:
             cmd = cmd.strip()
@@ -98,19 +88,19 @@ class Linter:
                 cmd = self.languages.get(lang)
 
         if callable(cmd):
-            lintres = cmd(fname, rel_fname, code)
+            linkres = cmd(fname, rel_fname, code)
         elif cmd:
-            lintres = self.run_cmd(cmd, rel_fname, code)
+            linkres = self.run_cmd(cmd, rel_fname, code)
         else:
-            lintres = basic_lint(rel_fname, code)
+            linkres = basic_lint(rel_fname, code)
 
-        if not lintres:
+        if not linkres:
             return
 
         res = "# Fix any errors below, if possible.\n\n"
-        res += lintres.text
+        res += linkres.text
         res += "\n"
-        res += tree_context(rel_fname, code, lintres.lines)
+        res += tree_context(rel_fname, code, linkres.lines)
 
         return res
 
@@ -149,12 +139,10 @@ class Linter:
         try:
             result = subprocess.run(
                 flake8_cmd,
+                cwd=self.root,
                 capture_output=True,
                 text=True,
                 check=False,
-                encoding=self.encoding,
-                errors="replace",
-                cwd=self.root,
             )
             errors = result.stdout + result.stderr
         except Exception as e:
@@ -206,24 +194,10 @@ def basic_lint(fname, code):
     if not lang:
         return
 
-    # Tree-sitter linter is not capable of working with typescript #1132
-    if lang == "typescript":
-        return
-
-    try:
-        parser = get_parser(lang)
-    except Exception as err:
-        print(f"Unable to load parser: {err}")
-        return
-
+    parser = get_parser(lang)
     tree = parser.parse(bytes(code, "utf-8"))
 
-    try:
-        errors = traverse_tree(tree.root_node)
-    except RecursionError:
-        print(f"Unable to lint {fname} due to RecursionError")
-        return
-
+    errors = traverse_tree(tree.root_node)
     if not errors:
         return
 

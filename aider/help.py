@@ -1,120 +1,124 @@
 #!/usr/bin/env python
 
-import json
-import os
-import shutil
-import warnings
+import time
 from pathlib import Path
 
-import importlib_resources
+import litellm
+from dump import dump
+from llama_index.core import (
+    Document,
+    StorageContext,
+    VectorStoreIndex,
+    load_index_from_storage,
+)
+from llama_index.core.node_parser import MarkdownNodeParser
 
-from aider import __version__, utils
-from aider.dump import dump  # noqa: F401
-from aider.help_pats import exclude_website_pats
-
-warnings.simplefilter("ignore", category=FutureWarning)
+litellm.suppress_debug_info = True
 
 
-def install_help_extra(io):
-    pip_install_cmd = [
-        "aider-chat[help]",
-        "--extra-index-url",
-        "https://download.pytorch.org/whl/cpu",
+def should_skip_dir(dirname):
+    if dirname.startswith("OLD"):
+        return True
+    if dirname.startswith("tmp"):
+        return True
+    if dirname == "examples":
+        return True
+    if dirname == "_posts":
+        return True
+
+
+def walk_subdirs_for_files(root_dir):
+    root_path = Path(root_dir)
+    for path in root_path.rglob("*.md"):
+        if any(should_skip_dir(part) for part in path.parts):
+            continue
+        yield str(path)
+
+
+def execute(question, text):
+    sys_content = """Answer questions about how to use the Aider program.
+Give answers about how to use aider to accomplish the user's questions,
+not general advice on how to use other tools or approaches.
+
+Use the provided aider documentation *if it is relevant to the user's questions*.
+
+Include a urls to the aider docs that might be relevant for the user to read
+.
+
+If you don't know the answer, say so and suggest some relevant aider doc urls.
+If the user asks how to do something that aider doesn't support, tell them that.
+
+Be helpful but concise.
+
+Unless the question indicates otherwise, assume the user wants to use
+aider as a CLI tool.
+"""
+
+    usage = Path("website/docs/usage.md").read_text()
+
+    content = f"""# Question:
+
+{question}
+
+
+# Relevant documentation:
+
+{text}
+
+#####
+
+{usage}
+"""
+
+    messages = [
+        dict(
+            role="system",
+            content=sys_content,
+        ),
+        dict(
+            role="user",
+            content=content,
+        ),
     ]
-    res = utils.check_pip_install_extra(
-        io,
-        "llama_index.embeddings.huggingface",
-        "To use interactive /help you need to install the help extras",
-        pip_install_cmd,
+
+    res = litellm.completion(
+        messages=messages,
+        # model="gpt-3.5-turbo",
+        model="gpt-4o",
     )
+
     return res
 
 
-def get_package_files():
-    for path in importlib_resources.files("aider.website").iterdir():
-        if path.is_file():
-            yield path
-        elif path.is_dir():
-            for subpath in path.rglob("*.md"):
-                yield subpath
-
-
 def fname_to_url(filepath):
-    website = "website"
-    index = "index.md"
-    md = ".md"
+    if filepath.startswith("website/_includes/"):
+        docid = ""
+    else:
+        website = "website/"
+        assert filepath.startswith(website), filepath
+        docid = filepath[len(website) :]
+        docid = "https://aider.chat/" + filepath
 
-    # Convert backslashes to forward slashes for consistency
-    filepath = filepath.replace("\\", "/")
-
-    # Convert to Path object for easier manipulation
-    path = Path(filepath)
-
-    # Split the path into parts
-    parts = path.parts
-
-    # Find the 'website' part in the path
-    try:
-        website_index = [p.lower() for p in parts].index(website.lower())
-    except ValueError:
-        return ""  # 'website' not found in the path
-
-    # Extract the part of the path starting from 'website'
-    relevant_parts = parts[website_index + 1 :]
-
-    # Handle _includes directory
-    if relevant_parts and relevant_parts[0].lower() == "_includes":
-        return ""
-
-    # Join the remaining parts
-    url_path = "/".join(relevant_parts)
-
-    # Handle index.md and other .md files
-    if url_path.lower().endswith(index.lower()):
-        url_path = url_path[: -len(index)]
-    elif url_path.lower().endswith(md.lower()):
-        url_path = url_path[: -len(md)] + ".html"
-
-    # Ensure the URL starts and ends with '/'
-    url_path = url_path.strip("/")
-
-    return f"https://aider.chat/{url_path}"
+    return docid
 
 
 def get_index():
-    from llama_index.core import (
-        Document,
-        StorageContext,
-        VectorStoreIndex,
-        load_index_from_storage,
-    )
-    from llama_index.core.node_parser import MarkdownNodeParser
-
-    dname = Path.home() / ".aider" / "caches" / ("help." + __version__)
-
-    index = None
-    try:
-        if dname.exists():
-            storage_context = StorageContext.from_defaults(
-                persist_dir=dname,
-            )
-            index = load_index_from_storage(storage_context)
-    except (OSError, json.JSONDecodeError):
-        shutil.rmtree(dname)
-
-    if index is None:
+    dname = Path("storage")
+    if dname.exists():
+        storage_context = StorageContext.from_defaults(
+            persist_dir=dname,
+        )
+        index = load_index_from_storage(storage_context)
+    else:
         parser = MarkdownNodeParser()
 
         nodes = []
-        for fname in get_package_files():
+        for fname in walk_subdirs_for_files("website"):
+            dump(fname)
+            # doc = FlatReader().load_data(Path(fname))
             fname = Path(fname)
-            if any(fname.match(pat) for pat in exclude_website_pats):
-                continue
-
             doc = Document(
-                text=importlib_resources.files("aider.website")
-                .joinpath(fname)
-                .read_text(encoding="utf-8"),
+                text=fname.read_text(),
                 metadata=dict(
                     filename=fname.name,
                     extension=fname.suffix,
@@ -123,41 +127,55 @@ def get_index():
             )
             nodes += parser.get_nodes_from_documents([doc])
 
-        index = VectorStoreIndex(nodes, show_progress=True)
-        dname.parent.mkdir(parents=True, exist_ok=True)
+        index = VectorStoreIndex(nodes)
         index.storage_context.persist(dname)
 
     return index
 
 
-class Help:
-    def __init__(self):
-        from llama_index.core import Settings
-        from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+when = time.time()
 
-        os.environ["TOKENIZERS_PARALLELISM"] = "true"
-        Settings.embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5")
+index = get_index()
 
-        index = get_index()
+print("get_index", time.time() - when)
+when = time.time()
 
-        self.retriever = index.as_retriever(similarity_top_k=20)
+retriever = index.as_retriever(similarity_top_k=20)
 
-    def ask(self, question):
-        nodes = self.retriever.retrieve(question)
+#
+# question = "how can i convert a python script to js"
+# question = "i am getting an error message about unknown context window"
+# question = "i am getting an error message about exhausted context window"
+# question = "The chat session is larger than the context window!"
+# question = "how do i add deepseek api key to yaml"
+question = (
+    "It would be great if I could give aider an example github PR and instruct it to do the same"
+    " exact thing for another integration."
+)
 
-        context = f"""# Question: {question}
+nodes = retriever.retrieve(question)
 
-# Relevant docs:
+print("retrieve", time.time() - when)
+when = time.time()
 
-"""  # noqa: E231
+dump(len(nodes))
 
-        for node in nodes:
-            url = node.metadata.get("url", "")
-            if url:
-                url = f' from_url="{url}"'
+context = ""
+for node in nodes:
+    fname = node.metadata["filename"]
+    url = node.metadata.get("url", "")
+    if url:
+        url = f' from_url="{url}"'
 
-            context += f"<doc{url}>\n"
-            context += node.text
-            context += "\n</doc>\n\n"
+    context += f"<doc{url}>\n"
+    context += node.text
+    context += "\n</doc>\n\n"
 
-        return context
+# dump(context)
+
+res = execute(question, context)
+content = res.choices[0].message.content
+dump(content)
+
+print("llm", time.time() - when)
+when = time.time()
