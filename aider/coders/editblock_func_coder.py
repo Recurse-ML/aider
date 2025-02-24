@@ -58,7 +58,6 @@ class EditBlockFunctionCoder(Coder):
     ]
 
     def __init__(self, code_format, *args, **kwargs):
-        raise RuntimeError("Deprecated, needs to be refactored to support get_edits/apply_edits")
         self.code_format = code_format
 
         if code_format == "string":
@@ -84,6 +83,18 @@ class EditBlockFunctionCoder(Coder):
         self.gpt_prompts = EditBlockFunctionPrompts()
         super().__init__(*args, **kwargs)
 
+    def update_cur_messages(self, content, edited):
+        if self.partial_response_content:
+            self.cur_messages += [dict(role="assistant", content=self.partial_response_content)]
+        if self.partial_response_function_call:
+            self.cur_messages += [
+                dict(
+                    role="assistant",
+                    content=None,
+                    function_call=self.partial_response_function_call,
+                )
+            ]
+
     def render_incremental_response(self, final=False):
         if self.partial_response_content:
             return self.partial_response_content
@@ -92,7 +103,7 @@ class EditBlockFunctionCoder(Coder):
         res = json.dumps(args, indent=4)
         return res
 
-    def _update_files(self):
+    def update_files(self):
         name = self.partial_response_function_call.get("name")
 
         if name and name != "replace_lines":
@@ -111,9 +122,9 @@ class EditBlockFunctionCoder(Coder):
             updated = get_arg(edit, "updated_lines")
 
             # gpt-3.5 returns lists even when instructed to return a string!
-            if self.code_format == "list" or type(original) is list:
+            if self.code_format == "list" or type(original) == list:
                 original = "\n".join(original)
-            if self.code_format == "list" or type(updated) is list:
+            if self.code_format == "list" or type(updated) == list:
                 updated = "\n".join(updated)
 
             if original and not original.endswith("\n"):
@@ -124,10 +135,7 @@ class EditBlockFunctionCoder(Coder):
             full_path = self.allowed_to_edit(path)
             if not full_path:
                 continue
-            content = self.io.read_text(full_path)
-            content = do_replace(full_path, content, original, updated)
-            if content:
-                self.io.write_text(full_path, content)
+            if do_replace(full_path, original, updated, self.dry_run):
                 edited.add(path)
                 continue
             self.io.tool_error(f"Failed to apply edit to {path}")
