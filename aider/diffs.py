@@ -11,10 +11,10 @@ def main():
 
     file_orig, file_updated = sys.argv[1], sys.argv[2]
 
-    with open(file_orig, "r", encoding="utf-8") as f:
+    with open(file_orig, "r") as f:
         lines_orig = f.readlines()
 
-    with open(file_updated, "r", encoding="utf-8") as f:
+    with open(file_updated, "r") as f:
         lines_updated = f.readlines()
 
     for i in range(len(file_updated)):
@@ -50,6 +50,7 @@ def diff_partial_update(lines_orig, lines_updated, final=False, fname=None):
     # dump(lines_orig)
     # dump(lines_updated)
 
+    assert_newlines(lines_orig)
     assert_newlines(lines_orig)
 
     num_orig_lines = len(lines_orig)
